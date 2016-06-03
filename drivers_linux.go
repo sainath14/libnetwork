@@ -16,6 +16,7 @@ func getInitializers() []initializer {
 		{null.Init, "null"},
 		{remote.Init, "remote"},
 		{overlay.Init, "overlay"},
+                {vfvlan.Init, "vfvlan"},
 	}
 
 	in = append(in, additionalDrivers()...)
