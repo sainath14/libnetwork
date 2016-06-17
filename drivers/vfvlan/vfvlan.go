@@ -7,9 +7,10 @@ import (
 	"github.com/docker/libnetwork/discoverapi"
 	"github.com/docker/libnetwork/driverapi"
 	"github.com/docker/libnetwork/types"
+	"github.com/vishvananda/netlink"
 	"net"
 	"os"
-	"strings"
+	//	"strings"
 )
 
 type networkTable map[string]*network
@@ -34,76 +35,85 @@ type configuration struct {
 
 type driver struct {
 	networks networkTable
+	pfs      pf_map
 }
 
-type pf_db map[string][]string
+type pf_map map[string][]string
 
 func Init(dc driverapi.DriverCallback, config map[string]interface{}) error {
 	c := driverapi.Capability{
 		DataScope: datastore.LocalScope,
 	}
 
+	/*
+	   	pci_path := "/sys/bus/pci/devices"
+
+	   	file, err := os.Open(pci_path)
+
+	   	pci_list, err := file.Readdir(0)
+
+	   	if err != nil {
+	   		logrus.Errorf(err.Error())
+	   	}
+
+	   	for _, value := range pci_list {
+	   		logrus.Debugf("vfvlan" + value.Name())
+	   		device_path := pci_path + value.Name() + "/"
+	   		logrus.Debugf("vfvlan" + device_path)
+	   		device_info, err := os.Open(device_path)
+	   		if err != nil {
+	   			logrus.Errorf("vfvlan" + err.Error())
+	   		}
+
+	   		device_info_files, err := device_info.Readdir(0)
+	   		if err != nil {
+	   			logrus.Errorf("vfvlan" + err.Error())
+	   		}
+
+	   		if err == nil {
+	   			sriov_present := false
+	   			bytes := make([]byte, 2)
+	   			var sriov_numvfs_path string
+	   			for _, value := range device_info_files {
+	   				logrus.Debugf("vfvlan" + value.Name())
+	   				if strings.Contains(value.Name(), "sriov_total") {
+	   					sriov_present = true
+	   					totalvfs_file_path := device_path + value.Name()
+	   					logrus.Debugf("vfvlan" + totalvfs_file_path)
+	   					totalvfs_file, _ := os.Open(totalvfs_file_path)
+	   					if _, err := totalvfs_file.Read(bytes); err == nil {
+	   						logrus.Debugf("vfvlan Num of vfs " + string(bytes))
+	   					} else {
+	   						logrus.Errorf("vfvlan  " + err.Error())
+	   					}
+	   				}
+
+	   				if strings.Contains(value.Name(), "sriov_numvfs") {
+	   					sriov_numvfs_path = device_path + value.Name()
+	   				}
+	   				logrus.Debugf(value.Name())
+	   			}
+
+	   			if sriov_present == true {
+	                                   logrus.Debugf("vfvlan  " + sriov_numvfs_path)
+	   				numvfs_file, _ := os.OpenFile(sriov_numvfs_path, os.O_RDWR, 0666)
+	   				zero := []byte{48}
+	   				numvfs_file.Write(zero)
+	   				numvfs_file.Sync()
+	   				numvfs_file.Write(bytes)  //this appends the count next to 0
+	   			}
+	   		}
+	   	}
+	*/
+
+	pf_info := pf_map{}
+	pf_path := "/sys/bus/pci/devices/0000:03:00.1"
+	vf_path := "/sys/bus/pci/devices/0000:03:10.1"
+	pf_info[pf_path] = append(pf_info[pf_path], vf_path)
+
 	d := &driver{
 		networks: networkTable{},
-	}
-
-	pci_path := "/home/unprivilegeduser/temp/devices/"
-
-	file, err := os.Open(pci_path)
-
-	pci_list, err := file.Readdir(0)
-
-	if err != nil {
-		logrus.Errorf(err.Error())
-	}
-
-	for _, value := range pci_list {
-		logrus.Debugf("vfvlan" + value.Name())
-		device_path := pci_path + value.Name() + "/"
-		logrus.Debugf("vfvlan" + device_path)
-		device_info, err := os.Open(device_path)
-		if err != nil {
-			logrus.Errorf("vfvlan" + err.Error())
-		}
-
-		device_info_files, err := device_info.Readdir(0)
-		if err != nil {
-			logrus.Errorf("vfvlan" + err.Error())
-		}
-
-		if err == nil {
-			sriov_present := false
-			bytes := make([]byte, 2)
-			var sriov_numvfs_path string
-			for _, value := range device_info_files {
-				logrus.Debugf("vfvlan" + value.Name())
-				if strings.Contains(value.Name(), "sriov_total") {
-					sriov_present = true
-					totalvfs_file_path := device_path + value.Name()
-					logrus.Debugf("vfvlan" + totalvfs_file_path)
-					totalvfs_file, _ := os.Open(totalvfs_file_path)
-					if _, err := totalvfs_file.Read(bytes); err == nil {
-						logrus.Debugf("vfvlan Num of vfs " + string(bytes))
-					} else {
-						logrus.Errorf("vfvlan  " + err.Error())
-					}
-				}
-
-				if strings.Contains(value.Name(), "sriov_numvfs") {
-					sriov_numvfs_path = device_path + value.Name()
-				}
-				logrus.Debugf(value.Name())
-			}
-
-			if sriov_present == true {
-                                logrus.Debugf("vfvlan  " + sriov_numvfs_path)
-				numvfs_file, _ := os.OpenFile(sriov_numvfs_path, os.O_RDWR, 0666)
-				zero := []byte{48}
-				numvfs_file.Write(zero)
-				numvfs_file.Sync()
-				numvfs_file.Write(bytes)  //this appends the count next to 0
-			}
-		}
+		pfs:      pf_info,
 	}
 
 	return dc.RegisterDriver("vfvlan", d, c)
@@ -178,7 +188,38 @@ func (d *driver) Join(nid, eid string, sboxKey string, jinfo driverapi.JoinInfo,
 
 	logrus.Debugf("nid %q , eid passed is %q", nid, eid)
 
-	ep.srcName = "eth2"
+	//tie a pf to a physical network - a single pf can accomodate multiple virtual LANs (vf vlan id)
+	//physical network name can be passed as a label to the driver?? network create options
+	//finding the interface name (ethX) can be made a function
+
+	pf_path := "/sys/bus/pci/devices/0000:03:00.1"
+	pf_interface := pf_path + "/net"
+	pf_interface_info, _ := os.Open(pf_interface)
+	pf_interface_info_dir, err := pf_interface_info.Readdir(0)
+	var pf_interface_name string
+	if err == nil {
+		for _, value := range pf_interface_info_dir {
+			pf_interface_name = value.Name()
+		}
+	}
+
+	pf_link, _ := netlink.LinkByName(pf_interface_name)
+	err = netlink.LinkSetVfVlan(pf_link, 0, 1300)
+
+	vf_path, ok := d.pfs["/sys/bus/pci/devices/0000:03:00.1"]
+	if !ok {
+		logrus.Debugf("vfvlan - pf info not found in driver!!")
+	}
+	vf_interface := vf_path[0] + "/net"
+	interface_info, _ := os.Open(vf_interface)
+	interface_info_dir, err := interface_info.Readdir(0)
+	if err == nil {
+		for _, value := range interface_info_dir {
+			ep.srcName = value.Name()
+		}
+	}
+
+	//	ep.srcName = "eth2"
 
 	//s := n.getSubnetforIPv4(ep.addr)
 
